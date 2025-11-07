@@ -69,7 +69,7 @@ class ACO:
 
 
     """ === 兩位學姐做 === """
-    def run(self):  # main function to run the ACO, return (bestObj, allSol)
+    def run(self):  # main function to run the ACO, return (best obj, best sol)
         pass  # write the code here
         # you might need to use self.randomTransfer(), self.calculateObj(), self.destroy(), self.repair(), self.updatePheromone()
 
