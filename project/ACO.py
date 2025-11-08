@@ -1,4 +1,5 @@
 import numpy as np
+import random
 
 """
 allSol is a list of sol (of all ants in an iteration)
@@ -55,7 +56,7 @@ class ACO:
         coords = np.array(coordsList)
         distMatrix = np.zeros((self.customerCnt + 1, self.customerCnt + 1))
         for i in range(self.customerCnt + 1):
-            for j in range(i, self.customerCnt + 1):
+            for j in range(i + 1, self.customerCnt + 1):
                 dist = np.linalg.norm(coords[i] - coords[j])
                 distMatrix[i, j] = distMatrix[j, i] = dist
         
@@ -67,9 +68,13 @@ class ACO:
         self.gt = gt              # a scalar, per unit distance travel cost
         self.objSigma = objSigma  # a scalar, weight for veh dispatch cost in obj (eq 1)
 
+        # calculate the normalized dist (for destroy operator)
+        maxDist = np.max(self.distMatrix)
+        self.normalizedDistMatrix = self.distMatrix / maxDist
+
 
     """ === 兩位學姐做 === """
-    def run(self):  # main function to run the ACO, return (best obj, best sol)
+    def run(self):  # main function to run the ACO, return a list [bestObj, a list of best routes]
         pass  # write the code here
         # you might need to use self.randomTransfer(), self.calculateObj(), self.destroy(), self.repair(), self.updatePheromone()
 
@@ -90,7 +95,6 @@ class ACO:
         pass  # write the code here
 
     def updatePheromone(self, allSol, allObj):  # return the updated pheromoneMatrix
-        # allSol: a list of sol, a sol is also a list
         # all Obj: a list of objective values
         pass  # write the code here
 
@@ -127,8 +131,50 @@ class ACO:
         return True
 
 
-    def destroy(self, sol):  # return new sol, R (a list of removed nodes)
-        pass  # write the code here
+    def destroy(self, sol, L, D = 3):  # return new sol, R (a list of removed nodes)
+        
+        # helper function: calculate relevance between 2 customers i and j
+        def calculateRelevance(i, j):
+            
+            # V_ij = 0 if i and j are in the same route; 1 otherwise
+            sameRoute = any(i in route and j in route for route in sol)
+            V_ij = 0 if sameRoute else 1
+            
+            # relevance R_ij = 1 / (C'_ij + V_ij, C'_ij is the normalized distance between i and j)
+            denom = self.normalizedDistMatrix[i][j] + V_ij
+            return 1 / denom if denom != 0 else float("inf")  # avoid division by zero
+
+
+        # main logic of destroy operator
+        R = []  # a list of removed customers
+        U = set([i for i in range(1, self.customerCnt + 1)])  # a set of unremoved customers
+
+        # randomly remove a seed customer
+        seed = random.choice(list(U))
+        R.append(seed)
+        U.remove(seed)
+
+        # remove the second to the L-th customer based on relatedness
+        while len(R) <= L:
+            seed = random.choice(R)  # randomly select a seed customer from R
+            relevanceScores = [(c, calculateRelevance(seed, c)) for c in U]
+            relevanceScores.sort(key = lambda x: x[1], reverse = True)  # sort relevance from high to low
+            
+            idx = int((random.random() ** D) * len(U))  # idx is the index of customer to remove in relevanceScores
+            removedCustomer = relevanceScores[idx][0]
+            """ if D is larger, customers with higher relevance scores are more likely to be removed. """
+            
+            R.append(removedCustomer)
+            U.remove(removedCustomer)
+
+        # re-construct the new sol without the removed customers
+        newSol = []
+        for route in sol:
+            newRoute = [node for node in route if node not in R]  # remove the customers in R
+            if len(newRoute) > 2:  # route is not [0, 0]
+                newSol.append(newRoute[:])  # deep copy newRoute into newSol
+
+        return newSol, R
 
 
     """ === 學長做 === """
@@ -152,11 +198,8 @@ if __name__ == "__main__":
     # print("bestSol:", bestSol)
 
     "test your sub-functions here, the following is just an example of checkFeasibility()"
-    route1 = [0, 1, 2, 0]
-    print(solver.checkFeasibility(route1))  # expect True
-    route2 = [0, 2, 1, 0]
-    print(solver.checkFeasibility(route2))  # expect False, since the time window of a customer is violated
-    route3 = [0, 3, 2, 0]
-    print(solver.checkFeasibility(route3))  # expect False, since the time window of the depot is violated
-    route4 = [0, 1, 4, 0]
-    print(solver.checkFeasibility(route4))  # expect False, since the vehicle capacity is exceeded
+    sol = [[0, 1, 2, 3, 0], [0, 4, 0]]
+    print("original sol", sol)
+    newSol, R = solver.destroy(sol, L = 1, D = 3)
+    print("new sol", newSol)
+    print("R", R)
