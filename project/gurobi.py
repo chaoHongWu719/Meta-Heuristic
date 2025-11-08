@@ -63,7 +63,7 @@ class GurobiForVRPSPDTW:
         # S[i] = service start time at node i
         S = model.addVars(V, vtype = GRB.CONTINUOUS, lb = 0)
         
-        # L[i, k] = load upon departure from node i
+        # L[i] = load upon departure from node i
         L = model.addVars(V, vtype = GRB.CONTINUOUS, lb = 0)
 
         # L0[k] = initial load of vehicle k
