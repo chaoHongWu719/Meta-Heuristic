@@ -1,6 +1,7 @@
 import numpy as np
 import random
 import copy
+import heapq
 
 """
 a sol is a list of routes
@@ -213,11 +214,50 @@ class ACO:
         return newSol, R
 
 
-    """ === 學長做 === """
-    def repair(self, sol, R):  # return (new sol, new obj)
-        # R: a list of removed nodes (to be inserted back somewhere)
-        pass  # write the code here
-        # you might need to use self.checkFeasibility() and self.calculateObj()
+    def repair(self, sol, R):
+        while R :  # while R is not empty
+            insertionCost = {node: [] for node in R}  # insertionCost[node] = a list of (routeID, position, delta)
+
+            # 1. try each possible place for insertion
+            for node in R:
+                for j, route in enumerate(sol):  # for each route (idx = j) 
+                    for pos in range(1, len(route)):  # for each possible position (pos, cannot insert before the starting depot)
+                        candRoute = route[:]
+                        candRoute.insert(pos, node)
+                        if not self.checkFeasibility(candRoute):  # insert at this pos is infeasible
+                            continue         
+                        
+                        # calculate delta : change of obj
+                        prev = route[pos-1]
+                        next = route[pos]
+                        distIncrease = self.distMatrix[prev, node] + self.distMatrix[node, next] - self.distMatrix[prev, next]
+                        delta = (1 - self.objSigma) * self.gt * distIncrease
+                        insertionCost[node].append((j, pos, delta))
+
+                # add an alternative : open a new route, change of obj [1] veh dispatch + 1 [2] dist + 2 * dist[0][node]
+                insertionCost[node].append((None, None, self.objSigma * self.gd + (1 - self.objSigma) *  self.gt * 2 * self.distMatrix[0, node]))
+
+            # 2. calculate regret value
+            regret = {}  # regred[node] = (regret value, best (routeID, position, delta))
+            for node, lst in insertionCost.items():
+                if len(lst) == 1:  # this node can only be inserted to a new route
+                    regret[node] = (-1, lst[0])  # give it a small regret value s.t. very unlikely to be chosen in this iteration
+                else:
+                    # best, second = (routeIdx, pos, delta), key = delta
+                    best, second = heapq.nsmallest(2, lst, key = lambda x: x[2])
+                    regret[node] = (second[2] - best[2], best)
+            
+            # 3. choose the node and its corresponding pos with the largest regret value
+            nodeToInsert = max(regret.keys(), key = lambda n: regret[n][0])  # key = regret value
+            R.remove(nodeToInsert)
+            bestRouteIdx, bestPos, _ = regret[nodeToInsert][1]
+            if bestRouteIdx is None:  # open a new route for this nodeToInsert
+                newRoute = [0, nodeToInsert, 0]
+                sol.append(newRoute)
+            else:
+                sol[bestRouteIdx].insert(bestPos, nodeToInsert)
+
+        return sol
 
 
 
@@ -234,8 +274,7 @@ if __name__ == "__main__":
     # print("bestSol:", bestSol)
 
     "test your sub-functions here, the following is just an example of checkFeasibility()"
-    sol = [[0, 1, 2, 3, 0], [0, 4, 0]]
-    print("original sol", sol)
-    newSol, R = solver.destroy(sol, L = 1, D = 3)
-    print("new sol", newSol)
-    print("R", R)
+    sol = [[0, 4, 1, 0]]
+    R = [2, 3]
+    sol = solver.repair(sol, R)
+    print("sol after repair", sol)
