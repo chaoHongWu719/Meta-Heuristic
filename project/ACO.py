@@ -10,7 +10,7 @@ a route is a list of nodes = [0, customer1, customer2, ..., 0]
 
 class ACO:
 
-    def setAlgorithmParameter(self, m = 20, alpha = 2, beta = 1, gamma = 3, delta = 0.5, rho = 0.85, Q = 1000, r0 = 0.5, maxIter = 200):
+    def setAlgorithmParameter(self, m = 20, alpha = 2, beta = 1, gamma = 2, delta = 3, rho = 0.85, Q = 1000, r0 = 0.5, maxIter = 200, L = 10, D = 3):
         self.m = m           # number of ants
         self.alpha = alpha   # pheromone factor
         self.beta = beta     # heuristic factor for (1 / dist)
@@ -20,12 +20,9 @@ class ACO:
         self.Q = Q           # pheromone intensity (in equation 20)
         self.r0 = r0         # exploitation threshold (in equation 15)
         self.maxIter = maxIter   # maximum number of iterations
-
-        if not hasattr(self, "customerCnt"):
-            raise AttributeError("run setProblemParameter() before setAlgorithmParameter()")
-        
-        self.pheromonematrix = np.ones((self.customerCnt + 1, self.customerCnt + 1))
-        # please help me find the initial value of pheromone in the paper
+        self.L = L  # number of customers to be removed in destroy operator
+        self.D = D  # larger D -> customers with higher relevance are more likely to be removed(in destroy operator)
+        self.pheromonematrix = None
 
 
     def setProblemParameter(self, datasetFilePath, gd = 60, gt = 5, objSigma = 0.6):
@@ -82,7 +79,7 @@ class ACO:
         bestObj = float("inf")
 
         # main loop
-        for _ in range(self.maxIter):
+        for iter in range(self.maxIter):
 
             # initialize for this iteration
             Sbest = None  # best sol found in this iteration
@@ -91,7 +88,7 @@ class ACO:
             # each ant constructs a sol
             for _ in range(self.m):
                 sol = self.randomTransfer()   # generate a sol for this ant
-                obj = self.calculateObj(sol)  # calculate the obj of this sol
+                obj, _, _ = self.calculateObj(sol)  # calculate the obj of this sol
 
                 # update best solution found so far
                 if obj < SbestObj:
@@ -99,8 +96,7 @@ class ACO:
                     SbestObj = obj
 
             # destroy and repair
-            """ the value of L is not mentioned in the paper! """
-            Sd, R = self.destroy(sol = Sbest, L = 0.1 * self.customerCnt)  
+            Sd, R = self.destroy(sol = Sbest)  
             Sr, SrObj = self.repair(Sd, R)
 
             # global update
@@ -111,64 +107,210 @@ class ACO:
                 bestObj = SrObj
                 bestSol = copy.deepcopy(Sr)
             self.pheromonematrix = self.updatePheromone(Sbest)
+
+            print("iter", iter, "bestObj", bestObj)
         
-        return bestObj, bestSol
+        # destroy and repair "local search again"
+        Sd, R = self.destroy(sol = bestSol)  
+        Sr, SrObj = self.repair(Sd, R)
+        if SrObj < bestObj:
+            bestSol = copy.deepcopy(Sr)
+            bestObj = SrObj
+        return bestSol, self.calculateObj(bestSol)
 
 
-    """ === 兩位學姐做 === """
-    def findFeasibleNodes(self, route):  # return a list of "unvisited" "feasible" nodes
-        # return [0] if no customer can be found, and thus the ant should return to the depot and restart a route
-        # raise an error if even returning to depot is infeasible
-        pass # write the code here
-        # you might need to use self.checkFeasibility()
+    def findFeasibleNodes(self, visitedSet, route, bottleNeckLoad, currentLoad, currentTime):  # return a list of "unvisited" "feasible" nodes
+
+        # check feasibility given bottleNeckLoad and currentTime
+        def checkFeasibilityWithCummulation(nextNode):   # return True or False
+
+            # arrival time
+            arrivalTime = currentTime + self.timeMatrix[route[-1], nextNode]
+            if arrivalTime > self.timeWindow[nextNode][1]:
+                return False  # arrival later than the due time
+            
+            # ensure that we can back to depot within due time
+            startTime = max(arrivalTime, self.timeWindow[nextNode][0])  # starts no earlier than the ready time
+            endTime = startTime + self.serviceTime[nextNode]
+            if (endTime + self.timeMatrix[nextNode, 0] > self.timeWindow[0][1]):  # returning time to depot > due time
+                return False  # cannot return to depot within due time
+
+            # load
+            bottleNeckTemp = bottleNeckLoad + self.deliveryDemand[nextNode]  # this delivery would travels from depot to this node
+            if bottleNeckTemp > self.vehCapacity:
+                return False  # exceed capacity
+            
+            currentLoadTemp = currentLoad + self.pickupDemand[nextNode]  # no need to re-calculate the deliveryDemand, as it is dropped off here
+            bottleNeckTemp = max(bottleNeckTemp, currentLoadTemp)
+            if bottleNeckTemp > self.vehCapacity:
+                return False  # exceed capacity
+
+            return True  # feasible
 
 
+        feasible = []
+        for i in range(1, self.customerCnt + 1):
+            if i in visitedSet:
+                continue  # this node has been visited
+            
+            if checkFeasibilityWithCummulation(i):
+                feasible.append(i)  # this node can be visited next
+        
+        if len(feasible) == 0:  # no feasible node or all nodes have been visited
+            feasible = [0]  # the only choice now is returning to depot
+        
+        """
+        不可以單純累積 load; 事實上每個站點的 pickup 和 delivery 不可抵消!
+        因為 delivery 的意思是貨物必須 "從起點" 載過來，而不是當時車上有貨就好
+        """
+        # for j in range(1, self.customerCnt + 1):
+        #     if j in visitedSet:  # 若已拜訪過，就跳過
+        #         continue
+        #     load_after = currentLoad + (self.pickupDemand[j] - self.deliveryDemand[j])
+        #     if load_after > self.vehCapacity: # 如果超過車輛容量，就不可行
+        #         continue
+
+        #     travelTime = self.timeMatrix[curr][j]
+        #     arrival = currentTime + travelTime
+        #     ready, due = self.timeWindow[j] # 顧客時間窗
+
+        #     if arrival <= due + 1e-6:
+        #         feasible.append(j)
+
+        return feasible
+    
+
+    """ === not checked === """
     def randomTransfer(self):  # return a sol of an ant (a list of routes, a route is also a list)
-        pass  # write the code here
-        # you might need to use self.findFeasibleNodes()
+        EPS = 1e-9   # 極小常數，避免除以 0
+        sol = []     
+        visitedSet = set()  # 已拜訪客戶的集合
+
+        while len(visitedSet) < self.customerCnt:
+            route = [0] # 如果還有顧客沒拜訪，就再從倉庫出發
+            currentTime = self.timeWindow[0][0]  # 當前時間
+            currentLoad = 0  # 當前車量載重
+            bottleNeckLoad = 0  # 到目前為止的容量瓶頸
+            currNode = 0  # 目前的客戶編號
+
+            while True:  
+                # 找這條路線下一個可以拜訪的顧客候選
+                feasibleNodes = self.findFeasibleNodes(visitedSet, route, bottleNeckLoad, currentLoad, currentTime)
+                if feasibleNodes == [0]:  # 若沒有可行節點，回倉庫結束
+                    sol.append(route + [0])
+                    break
+                
+                # 算每個可行客戶的分數
+                scores = []  # scores[i] = feasibleNodes[i] 的分數
+                for j in feasibleNodes:
+                    tau = self.pheromonematrix[currNode][j] ** self.alpha
+                    eta = (1.0 / (self.distMatrix[currNode][j] + EPS)) ** self.beta
+                    ready, due = self.timeWindow[j]
+                    tw_term = (1.0 / max(due - ready, EPS)) ** self.gamma
+                    wt_term = (1.0 / max(self.serviceTime[j], EPS)) ** self.delta
+                    score = tau * eta * tw_term * wt_term
+                    scores.append(score)
+
+                # 依照分數計算機率
+                scores = np.array(scores, dtype = float)
+                sum_scores = scores.sum()
+                if sum_scores < 1e-12:  # 若總和為 0，均勻分布
+                    probs = np.ones_like(scores) / len(scores)
+                else:
+                    probs = scores / sum_scores
+                s = probs.sum()
+                probs = probs / (s if s > 0 else 1.0)
+
+                # 決定下一個節點（r0 控制貪婪 or 隨機）
+                r = random.random()  
+                if r <= self.r0:
+                    nextNode = feasibleNodes[int(np.argmax(probs))]
+                else:
+                    nextNode = int(np.random.choice(feasibleNodes, p = probs))
+
+                # 計算時間
+                travelTime = self.timeMatrix[currNode][nextNode]
+                arrival = currentTime + travelTime
+                ready, due = self.timeWindow[nextNode]
+                service = self.serviceTime[nextNode]
+
+                # 更新當前參數
+                currentTime = max(arrival, ready) + service # 更新當前時間
+                bottleNeckLoad += self.deliveryDemand[nextNode]  # 更新裝卸載前的容量瓶頸
+                currentLoad += self.pickupDemand[nextNode]  # 更新當前載重
+                bottleNeckLoad = max(bottleNeckLoad, currentLoad)  # 更新裝卸載後的容量瓶頸
+                route.append(nextNode)
+                visitedSet.add(nextNode) # 紀錄已拜訪
+                currNode = nextNode
+
+        return sol
 
 
     def calculateObj(self, sol):  # return the obj of a sol
-        pass  # write the code here
+        total_distance = 0.0
+        for route in sol:
+            for i in range(len(route) - 1):
+                total_distance += self.distMatrix[route[i]][route[i + 1]] # 累加路徑距離
+        NV = len(sol) # 車輛數量
+        f = self.objSigma * self.gd * NV + (1.0 - self.objSigma) * self.gt * total_distance
+        """ 加上 self.gd (單位派車成本) and self.gt (單位旅行距離成本) """
+        return f, NV, total_distance    # 目標函數 f(S), 車輛數, 總距離
+
 
     def updatePheromone(self, Sbest):  # return the updated pheromoneMatrix
-        # Sbest: the best sol found in the current iteration
-        pass  # write the code here
+        EPS = 1e-9     # 極小常數，用於避免除以 0 或 NaN 錯誤
+        self.pheromonematrix *= (1.0 - self.rho)  # 費洛蒙蒸發
+
+        for route in Sbest:
+            length = 0.0
+            for i in range(len(route) - 1):
+                length += self.distMatrix[route[i]][route[i + 1]]
+            delta_tau = self.Q / (length + EPS) # 計算該路徑增加的費洛蒙量
+            """ length 是邊 (i, j) 的長度 (論文 length of the path (i, j) 看起來是這個),
+                還是整條 route 的總長度 (目前的程式看起來是這個) ? 
+                但 gemeni & gpt 傾向論文寫錯了，應該看 route 總長度 """
+            for i in range(len(route) - 1):
+                u, v = route[i], route[i + 1]
+                self.pheromonematrix[u][v] += delta_tau # 更新費洛蒙
+                # self.pheromonematrix[v][u] = self.pheromonematrix[u][v]
+                """ 為甚麼設定費洛蒙矩陣[u][v] = [v][u] ? 
+                    gemeni: 因為多數的 TSP 沒有方向性，只考慮距離的話的確是對稱的
+                    gpt: 但是本問題有時間窗、pick-up / delivery, (i, j) 好不一定 (j, i) 好 """
+        return self.pheromonematrix
 
 
-    """ === 學弟做 === """
     def checkFeasibility(self, route):  # return True or False
-        load = sum(self.deliveryDemand[node] for node in route)  # initial load is the sum of delivery demands
+        load = sum(self.deliveryDemand[node] for node in route[1:-1])  # initial load is the sum of delivery demands
         if load > self.vehCapacity:
             return False  # infeasible, since the veh exceeds capacity at the start
 
         time = self.timeWindow[0][0]  # start from the depot
         for i in range(1, len(route)):  # exclude the starting depot, but include the ending depot
             prev = route[i-1]
-            curr = route[i]
+            currNode= route[i]
 
             # travel from prev to curr
-            time += self.timeMatrix[prev, curr]
+            time += self.timeMatrix[prev, currNode]
 
             # check time window
-            ready, due = self.timeWindow[curr]
+            ready, due = self.timeWindow[currNode]
             if time < ready:
                 time = ready  # wait at this node until ready
             if time > due:
                 return False  # infeasible, since the veh arrives later than the due time
 
             # add service time
-            time += self.serviceTime[curr]
+            time += self.serviceTime[currNode]
 
             # update load (no pickup or delivery at the ending depot)
-            load += (self.pickupDemand[curr] - self.deliveryDemand[curr])
+            load += (self.pickupDemand[currNode] - self.deliveryDemand[currNode])
             if load > self.vehCapacity:
                 return False  # infeasible, since the veh exceeds capacity
 
         return True
 
 
-    def destroy(self, sol, L, D = 3):  # return new sol, R (a list of removed nodes)
+    def destroy(self, sol):  # return new sol, R (a list of removed nodes)
         
         # helper function: calculate relevance between 2 customers i and j
         def calculateRelevance(i, j):
@@ -192,12 +334,12 @@ class ACO:
         U.remove(seed)
 
         # remove the second to the L-th customer based on relatedness
-        while len(R) <= L:
+        while len(R) <= self.L:
             seed = random.choice(R)  # randomly select a seed customer from R
             relevanceScores = [(c, calculateRelevance(seed, c)) for c in U]
             relevanceScores.sort(key = lambda x: x[1], reverse = True)  # sort relevance from high to low
             
-            idx = int((random.random() ** D) * len(U))  # idx is the index of customer to remove in relevanceScores
+            idx = int((random.random() ** self.D) * len(U))  # idx is the index of customer to remove in relevanceScores
             removedCustomer = relevanceScores[idx][0]
             """ if D is larger, customers with higher relevance scores are more likely to be removed. """
             
@@ -257,24 +399,22 @@ class ACO:
             else:
                 sol[bestRouteIdx].insert(bestPos, nodeToInsert)
 
-        return sol
+        obj, _, _ = self.calculateObj(sol)
+        return sol, obj
 
 
 
 if __name__ == "__main__":
     # datasetFilePath = "Wang_Chen_data/cdp101.txt"  # please put the folder "Wang_Chen_data" in the same directory as ACO.py
-    datasetFilePath = "anEasyExample.txt"  # just for testing
+    datasetFilePath = "Wang_Chen_data/rdp101.txt"  # just for testing
     solver = ACO()
     solver.setProblemParameter(datasetFilePath) 
-    solver.setAlgorithmParameter()
-
-    "do not run the below green code until we all finish our sub-functions"
-    # bestObj, bestSol = solver.run()
-    # print("bestObj:", bestObj)
-    # print("bestSol:", bestSol)
-
-    "test your sub-functions here, the following is just an example of checkFeasibility()"
-    sol = [[0, 4, 1, 0]]
-    R = [2, 3]
-    sol = solver.repair(sol, R)
-    print("sol after repair", sol)
+    solver.setAlgorithmParameter(m = 20, alpha = 2, beta = 1, gamma = 2, delta = 3, rho = 0.85, 
+        Q = 1000, r0 = 0.5, maxIter = 200, L = 0.1 * solver.customerCnt, D = 5)
+    bestSol, bestObjInfo = solver.run()
+    print("bestSol:")
+    for route in bestSol:
+        print(route)
+    print("bestObj:", bestObjInfo[0])
+    print("number of vehicle", bestObjInfo[1])
+    print("total dist", bestObjInfo[2])
