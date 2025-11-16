@@ -10,7 +10,7 @@ a sol is a list of routes
 a route is a list of nodes = [0, customer1, customer2, ..., 0]
 """
 
-EPS = 1e-10   # 極小常數，避免除以 0
+EPS = 1e-10   # 極小數字，避免除以 0
 
 class ACO:
 
